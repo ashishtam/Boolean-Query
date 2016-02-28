@@ -1,11 +1,13 @@
 # @author Ashish Tamrakar
-# @Date 2016-02-22
-# Program to find the inverted file of the Cransfield collection.
+# @Date 2016-02-26
+# Program to find the inverted file and then boolean query of the string to find the list of document id of the Cransfield collection.
 # Python v2.7.10
 import re
 from stemmer import PorterStemmer
-import sys
 import json
+from pythonds.basic.stack import Stack
+
+pObj = PorterStemmer()
 
 
 def addToDict(listWords, stemWord):
@@ -18,6 +20,7 @@ def addToDict(listWords, stemWord):
         listWords[stemWord] = 1
     return listWords
 
+
 def addDoc(docId, listWords):
     """
     Return the dictionary with {id, unique terms, and terms containing its term and term frequency}
@@ -25,6 +28,7 @@ def addDoc(docId, listWords):
     sortedList = sorted(listWords.items(), key=lambda t: t[0])
     output = {'id': docId, 'unique': len(sortedList), 'terms': sortedList}
     return output
+
 
 def createInvFileHash(invFileHash, docList):
     """
@@ -40,12 +44,124 @@ def createInvFileHash(invFileHash, docList):
                 invFileHash[term[0]] = [1, [[id, term[1]]]]
     return invFileHash
 
+
 def writeToFile(invFileHash):
     """
     Writes to the file
     """
     with open('output.json', 'w') as f:
         json.dump(invFileHash, f)
+
+
+def loadFromFile():
+    """
+    Loads the Inverted File Hash JSON file.
+    """
+    with open('output.json', 'r') as f:
+        return json.load(f)
+
+
+def infixToPostfix(infixexpr, prec):
+    """
+    Converts the Infix expression of queries into postfix expression
+    """
+    opStack = Stack()
+    postfixList = []
+    tokenList = infixexpr.split()
+    for token in tokenList:
+        if token.isalpha() and token not in (["OR", "AND", "NOT"]):
+            stemWord = pObj.stem(token, 0, len(token) - 1)
+            postfixList.append(stemWord)
+        elif token == '(':
+            opStack.push(token)
+        elif token == ')':
+            topToken = opStack.pop()
+            while topToken != '(':
+                postfixList.append(topToken)
+                topToken = opStack.pop()
+        else:
+            if (not opStack.isEmpty() and opStack.peek() == "NOT"):
+                postfixList.append(opStack.pop())
+
+            while (not opStack.isEmpty()) and (prec[opStack.peek()] >= prec[token] and token != "NOT"):
+                postfixList.append(opStack.pop())
+            opStack.push(token)
+
+    while not opStack.isEmpty():
+        postfixList.append(opStack.pop())
+
+    return postfixList
+
+
+def computeBooleanQuery(resultPostFix, dic, prec, stopwords):
+    """
+    Computes the boolean query and return the list with document id
+    """
+    wholeDocument = [x for x in range(1, 1401)]
+    opStack = Stack()
+    for item in resultPostFix:
+        if (item not in prec):
+            if (item in dic):
+                data = [item[0] for item in dic[item][1]]
+            elif (item in stopwords):
+                data = ['S']
+            else:
+                data = []
+            opStack.push(data)
+        else:
+            if (item == "AND"):
+                list2 = opStack.pop()
+                list1 = opStack.pop()
+                if ('S' in list1 and 'S' in list2):
+                    result = ['S']
+                elif ('S' in list1):
+                    result = list2
+                elif ('S' in list2):
+                    result = list1
+                else:
+                    result = list(set(list1).intersection(list2))
+                opStack.push(result)
+            elif (item == "OR"):
+                list2 = opStack.pop()
+                list1 = opStack.pop()
+                if ('S' in list1 and 'S' in list2):
+                    result = ['S']
+                elif ('S' in list1):
+                    result = list2
+                elif ('S' in list2):
+                    result = list1
+                else:
+                    result = list(set(list1).union(list2))
+                opStack.push(result)
+            elif (item == "NOT"):
+                list1 = opStack.pop()
+                if ('S' in list1):
+                    result = []
+                else:
+                    result = list(set(wholeDocument) - set(list1))
+                opStack.push(result)
+    finalResult = opStack.pop()
+    return (finalResult if ('S' not in finalResult) else [])
+
+
+def booleanQueryString(condition, stopwords):
+    """
+    Process the conversion of Infix expression to postfix and then compute the boolean query of string.
+    """
+    # Precedence of operators - 1. (,)  2. NOT  3. AND, OR
+    prec = {'OR': 3, 'AND': 3, 'NOT': 2, '(': 1}
+
+    # load from invFileHash
+    dic = loadFromFile()
+
+    resultPostFix = infixToPostfix(condition, prec)
+    result = computeBooleanQuery(resultPostFix, dic, prec, stopwords)
+
+    print "\nQuery->", condition, ":"
+    print "Total Number of Documents:", len(result)
+    print sorted(result)
+    return result
+
 
 def main():
     # Reading the document from the file
@@ -55,11 +171,11 @@ def main():
     fileStopwords = open('stopwords.txt', 'r')
     stopwordsList = fileStopwords.read()
     stopwords = stopwordsList.split()
+
     # List that maintains the document id number, number of unique terms in document, for each term in the document, its term and it's term frequency.
     docId = 1
-
-    #InvFileHash
     invFileHash = {}
+
     # Splits the multiple documents of the same file into list
     document = re.split(".I | \n.I", documents)[1:]
 
@@ -68,7 +184,6 @@ def main():
         text = doc[1][startIndex + 3:]
         words = re.findall(r'\w+', text)
 
-        pObj = PorterStemmer()
         listWords = {}
         for word in words:
             flagStopwords = word.lower() in stopwords
@@ -80,8 +195,27 @@ def main():
         docId += 1
         invFileHash = createInvFileHash(invFileHash, docList)
 
-    print "File written: output.json"
-    print "Number of terms:",len(invFileHash)
+    # Writes the invFileHash to output.json file in JSON format
     writeToFile(invFileHash)
+
+    # Boolean query string
+    condition = "vary"
+    booleanQueryString(condition, stopwords)
+
+    condition = "vary AND user"
+    booleanQueryString(condition, stopwords)
+
+    condition = "panama OR NOT user"
+    booleanQueryString(condition, stopwords)
+
+    condition = "panama OR NOT user AND vary"
+    booleanQueryString(condition, stopwords)
+
+    condition = "panama OR NOT ( user AND vary )"
+    booleanQueryString(condition, stopwords)
+
+    condition = "panama OR NOT ( is AND the )"
+    booleanQueryString(condition, stopwords)
+
 
 main()
